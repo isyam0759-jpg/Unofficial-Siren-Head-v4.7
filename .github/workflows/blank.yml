@@ -1,0 +1,27 @@
+name: Build mod
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip uploaded parts
+        run: for z in *.zip; do [ -f "$z" ] && unzip -oq "$z"; done; ls
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.1.1
+      - name: Build
+        working-directory: sirenhead-forge
+        run: gradle build --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sirenhead-mod-jar
+          path: sirenhead-forge/build/libs/*.jar
