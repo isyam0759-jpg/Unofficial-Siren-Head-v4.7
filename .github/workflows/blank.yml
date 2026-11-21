@@ -73,6 +73,69 @@ jobs:
           fi
           echo "Project ada di: $DIR"
 
+      # Perbaiki 7 error kompilasi (GeckoLib 4.4.9 + getMaxHealth final di 1.20.1)
+      - name: Terapkan patch kode
+        run: |
+          python3 - << 'PYEOF'
+          import os, sys
+
+          proj = os.environ["PROJECT_DIR"]
+          base = os.path.join(proj, "src/main/java/com/sirenhead")
+
+          # ---------- 1) SirenHeadEntity: getMaxHealth() bersifat final di 1.20.1 ----------
+          p = os.path.join(base, "entity/SirenHeadEntity.java")
+          s = open(p, encoding="utf-8").read()
+
+          def rep(s, old, new):
+              if s.count(old) != 1:
+                  print("SKIP (sudah diperbaiki / tidak cocok):", old.strip()[:70])
+                  return s
+              return s.replace(old, new)
+
+          if "MAX_HEALTH dibatasi" in s:
+              print("SKIP SirenHeadEntity: sudah dipatch")
+          else:
+            s = rep(s,
+              "    @Override public float getMaxHealth() { return variant == null ? super.getMaxHealth() : variant.health; }\n",
+              "")
+            s = rep(s,
+              "        this.setHealth(this.getMaxHealth());\n",
+              "        // MAX_HEALTH dibatasi 1024 oleh vanilla -> sisanya diskalakan lewat damage (lihat actuallyHurt)\n"
+              "        this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(Math.min(v.health, 1024.0F));\n"
+              "        this.setHealth(this.getMaxHealth());\n")
+            s = rep(s,
+              "        super.actuallyHurt(src, amount);\n",
+              "        if (variant != null && variant.health > getMaxHealth()) amount *= getMaxHealth() / variant.health;\n"
+              "        super.actuallyHurt(src, amount);\n")
+          open(p, "w", encoding="utf-8").write(s)
+
+          # ---------- 2) PlotArmorItem: API GeckoLib 4.4.9 (1.20.1) pakai IClientItemExtensions ----------
+          p = os.path.join(base, "item/PlotArmorItem.java")
+          s = open(p, encoding="utf-8").read()
+          s = rep(s, "import software.bernie.geckolib.animatable.client.RenderProvider;\n",
+                     "import net.minecraftforge.client.extensions.common.IClientItemExtensions;\n")
+          s = rep(s, "    private final Supplier<Object> renderProvider = GeoItem.makeRenderer(this);\n", "")
+          new_block = '''    @Override public void initializeClient(Consumer<IClientItemExtensions> consumer) {
+                  consumer.accept(new IClientItemExtensions() {
+                      private PlotArmorRenderer renderer;
+                      @Override public HumanoidModel<?> getHumanoidArmorModel(LivingEntity e, ItemStack s, EquipmentSlot slot, HumanoidModel<?> original) {
+                          if (renderer == null) renderer = new PlotArmorRenderer();
+                          renderer.prepForRender(e, s, slot, original);
+                          return renderer;
+                      }
+                  });
+              }
+          '''
+          if "public void createRenderer(" in s:
+              start = s.index("    @Override public void createRenderer(")
+              end = s.index("    @Override public void registerControllers")
+              s = s[:start] + new_block + s[end:]
+          else:
+              print("SKIP PlotArmorItem: createRenderer tidak ada")
+          open(p, "w", encoding="utf-8").write(s)
+          print("Patch selesai")
+          PYEOF
+
       - name: Setup Gradle (cache)
         if: env.HAS_WRAPPER == 'true'
         uses: gradle/actions/setup-gradle@v4
