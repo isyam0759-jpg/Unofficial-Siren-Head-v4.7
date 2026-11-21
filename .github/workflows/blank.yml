@@ -1,4 +1,6 @@
+
 name: Build mod
+
 on:
   workflow_dispatch:
   push:
@@ -7,21 +9,62 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Unzip uploaded parts
-        run: for z in *.zip; do [ -f "$z" ] && unzip -oq "$z"; done; ls
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install 7zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+
+      - name: Extract RAR project
+        run: |
+          mkdir -p extracted
+
+          if [ -f sirenhead-forge.part1.rar ]; then
+            7z x sirenhead-forge.part1.rar -oextracted -y
+          else
+            echo "ERROR: RAR part1 not found!"
+            exit 1
+          fi
+
+      - name: Find Gradle project
+        run: |
+          PROJECT_FILE=$(find extracted -type f \
+            \( -name build.gradle -o -name build.gradle.kts \) \
+            -print -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: Gradle project not found!"
+            find extracted -maxdepth 4 -type f
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Found project: $PROJECT_DIR"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v3
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.1.1
+
       - name: Build
-        working-directory: sirenhead-forge
-        run: gradle build --no-daemon
-      - uses: actions/upload-artifact@v4
+        run: gradle -p "$PROJECT_DIR" build --no-daemon
+
+      - name: Upload mod JAR
+        uses: actions/upload-artifact@v4
         with:
           name: sirenhead-mod-jar
-          path: sirenhead-forge/build/libs/*.jar
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          if-no-files-found: error
+          
