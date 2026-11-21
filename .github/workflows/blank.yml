@@ -25,13 +25,43 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Cari otomatis lokasi build.gradle (root repo ATAU di subfolder)
+      # Kalau project masih berupa file .rar (part1 + part2), ekstrak dulu
+      - name: Ekstrak RAR (jika ada)
+        run: |
+          FIRST=$(find . -maxdepth 2 -iname '*part1.rar' -not -path './.git/*' | head -n 1)
+          if [ -z "$FIRST" ]; then
+            FIRST=$(find . -maxdepth 2 -iname '*.rar' -not -path './.git/*' | sort | head -n 1)
+          fi
+          if [ -z "$FIRST" ]; then
+            echo "Tidak ada file .rar, lanjut pakai file di repo."
+            exit 0
+          fi
+          echo "Mengekstrak: $FIRST"
+          ls -la "$(dirname "$FIRST")" | grep -i rar || true
+          mkdir -p _src
+          sudo apt-get update -qq
+          if sudo apt-get install -y -qq unrar; then
+            unrar x -o+ -y "$FIRST" _src/
+          else
+            sudo apt-get install -y -qq 7zip
+            7zz x -y -o_src "$FIRST"
+          fi
+          echo "Isi hasil ekstrak:"
+          find _src -maxdepth 2 | head -40
+
+      # Cari otomatis lokasi build.gradle (prioritas hasil ekstrak, lalu seluruh repo)
       - name: Cari folder project
         run: |
-          BUILD_FILE=$(find . -maxdepth 3 \( -name build.gradle -o -name build.gradle.kts \) -not -path './.git/*' | head -n 1)
+          BUILD_FILE=""
+          if [ -d _src ]; then
+            BUILD_FILE=$(find _src -maxdepth 3 \( -name build.gradle -o -name build.gradle.kts \) | head -n 1)
+          fi
           if [ -z "$BUILD_FILE" ]; then
-            echo "::error::build.gradle tidak ditemukan di repo. Pastikan semua file project sudah di-upload."
-            find . -maxdepth 3 -not -path './.git/*' | head -50
+            BUILD_FILE=$(find . -maxdepth 3 \( -name build.gradle -o -name build.gradle.kts \) -not -path './.git/*' | head -n 1)
+          fi
+          if [ -z "$BUILD_FILE" ]; then
+            echo "::error::build.gradle tidak ditemukan. Cek apakah RAR part1 & part2 lengkap dan namanya benar (xxx.part1.rar, xxx.part2.rar)."
+            find . -maxdepth 3 -not -path './.git/*' | head -60
             exit 1
           fi
           DIR=$(dirname "$BUILD_FILE")
@@ -43,12 +73,10 @@ jobs:
           fi
           echo "Project ada di: $DIR"
 
-      # Kalau gradlew ada -> pakai wrapper
       - name: Setup Gradle (cache)
         if: env.HAS_WRAPPER == 'true'
         uses: gradle/actions/setup-gradle@v4
 
-      # Kalau gradlew TIDAK ada -> pakai Gradle yang diinstall (cocok untuk Forge 1.20.1)
       - name: Setup Gradle 8.1.1 (tanpa wrapper)
         if: env.HAS_WRAPPER == 'false'
         uses: gradle/actions/setup-gradle@v4
