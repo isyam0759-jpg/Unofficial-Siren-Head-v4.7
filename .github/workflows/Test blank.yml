@@ -1,0 +1,99 @@
+name: Build mod
+
+# Jalankan otomatis tiap push, atau manual dari tab Actions -> "Build mod" -> "Run workflow" (bisa dari HP).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Ambil kode
+        uses: actions/checkout@v4
+
+      - name: Siapkan sumber (langsung, atau dari file .zip di root repo)
+        shell: bash
+        run: |
+          if [ -f build.gradle ]; then
+            echo "Proyek ditemukan di root repo."
+            echo "SRC=$PWD" >> "$GITHUB_ENV"
+          else
+            Z=$(ls ./*.zip 2>/dev/null | head -n1 || true)
+            if [ -z "$Z" ]; then
+              echo "::error::Tidak ada build.gradle dan tidak ada file .zip di root repo. Upload sirenhead-forge-stage1.zip ke root repo."
+              exit 1
+            fi
+            echo "Mengekstrak $Z"
+            mkdir -p "$RUNNER_TEMP/src"
+            unzip -q "$Z" -d "$RUNNER_TEMP/src"
+            G=$(find "$RUNNER_TEMP/src" -maxdepth 3 -name build.gradle | head -n1)
+            if [ -z "$G" ]; then echo "::error::build.gradle tidak ada di dalam zip"; exit 1; fi
+            echo "SRC=$(dirname "$G")" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pasang Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle (mempercepat build ulang)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build (gradlew build)
+        shell: bash
+        run: |
+          cd "$SRC"
+          chmod +x gradlew
+          set +e
+          ./gradlew build --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
+          code=${PIPESTATUS[0]}
+          echo "BUILD_EXIT=$code" >> "$GITHUB_ENV"
+          exit $code
+
+      - name: Ringkasan error (untuk disalin dari HP)
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Hasil build"
+            if [ "${BUILD_EXIT:-1}" = "0" ]; then
+              echo "BERHASIL. Jar ada di Artifacts di bawah (sirenhead-jar)."
+            else
+              echo "GAGAL. Salin blok di bawah dan kirim ke Claude."
+              echo
+              echo '```'
+              grep -E "error:|warning: \[|FAILED|What went wrong|Could not|cannot find symbol|symbol:|location:" "$RUNNER_TEMP/build.log" | head -150 || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Simpan jar
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sirenhead-jar
+          path: ${{ env.SRC }}/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Simpan log build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+          
